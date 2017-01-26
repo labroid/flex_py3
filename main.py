@@ -29,6 +29,7 @@ db = None
 app = Flask(__name__)
 api = Api(app)
 
+#This is a GIT test
 
 def main():
     global db

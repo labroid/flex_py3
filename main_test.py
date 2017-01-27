@@ -22,3 +22,6 @@ def test_index():
     r = client.get('/')
     assert r.status_code == 200
     assert 'Hello World' in r.data.decode('utf-8')
+
+    md5sum='862f092f1467b7c79ce5a7388e97c3ee'
+

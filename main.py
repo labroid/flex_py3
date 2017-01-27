@@ -15,15 +15,13 @@
 
 # [START app]
 
-#This is a change to test git
-
-
 import logging
 import time
 import pymongo
 import json
+from pprint import pprint
 from flask import Flask, request
-from flask_restful import Resource, Api
+from flask_restful import Resource, Api, reqparse
 
 HOST = 'mongodb://labroid:mlab14@ds057176.mlab.com:57176/photo-meta'
 DATABASE = 'photo-meta'
@@ -33,8 +31,6 @@ db = None
 app = Flask(__name__)
 api = Api(app)
 
-#This is a GIT test
-#So is this one
 
 def main():
     global db
@@ -47,20 +43,26 @@ def hello():
     """Return a friendly HTTP greeting."""
     return 'Hello World!  RESTful interface.  GET POST as necessary'
 
-# class check_memberships(Resource):
-#     def get(self, md5sums):
-#         response = {}
-#         for md5sum in md5sums:
-#             response[md5sum] = db.find_one({'md5Sum': md5sum})
-#         return response
 
-#    def put(self, todo_id):
-#        pass
-#        return {todo_id: todo_id}
+class GetMetadata(Resource):
+    def get(self):
+        parser = reqparse.RequestParser()
+        parser.add_argument('md5sums', type=str, help="Provide list of MD5 sums as strings")
+        arguments = parser.parse_args()
+        md5sums = json.loads(arguments['md5sums'])
+        print("endpoint", request.path)
+        response = {}
+        for md5sum in md5sums:
+            response[md5sum] = db.find_one({'md5Checksum': md5sum}, {'_id': False})
+            if request.path == '/members':
+                if response[md5sum] is None:
+                    response[md5sum] = False
+                else:
+                    response[md5sum] = True
+        return response
 
-#Test change
 
-class count(Resource):
+class Count(Resource):
     def get(self):
         """Return number of items in database"""
         start = time.time()
@@ -68,21 +70,11 @@ class count(Resource):
         elapsed = time.time() - start
         return ({'elapsed': elapsed, 'count': count})
 
-class stats(Resource):
+class Stats(Resource):
     def get(self):
         """Return program status."""
         return {'count': 0, 'size': 10}
 
-#@app.route('/count')
-#def count():
-    # """Return number of items in database"""
-    # start = time.time()
-    # db = pymongo.MongoClient(host=HOST)[DATABASE][GPHOTOS_COLLECTION]
-    # count = db.count()
-    # elapsed = time.time() - start
-    # # print("Time to get count: {}".format(elapsed))
-    # # return 'Total objects in database: {}, Time to get count: {}'.format(count, elapsed)
-    # return(json.dumps({'elapsed': elapsed, 'count': count}))
 
 # class sync(Resource):
 #     """Sync Google Photos with cloud database"""
@@ -102,7 +94,6 @@ class stats(Resource):
 # def check_membership(md5list):  # TODO: How do I pass in arguments??
 
 
-
 @app.errorhandler(500)
 def server_error(e):
     logging.exception('An error occurred during a request.')
@@ -111,9 +102,9 @@ def server_error(e):
     See logs for full stacktrace.
     """.format(e), 500
 
-#api.add_resource(photo, 'photo/<string:md5sum>')
-api.add_resource(count, '/count')
-api.add_resource(stats, '/stats')
+api.add_resource(Count, '/count')
+api.add_resource(Stats, '/stats')
+api.add_resource(GetMetadata, '/metadata', '/members')
 
 # class Gphotos(object):
 #     """

@@ -1,42 +1,125 @@
-# Copyright 2015 Google Inc. All Rights Reserved.
-
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-
-# [START app]
-
 import logging
 import time
 import pymongo
 import json
+import collections
+import glob
+import os
+import math
 from pprint import pprint
 from flask import Flask, request
 from flask_restful import Resource, Api, reqparse
 
-HOST = 'mongodb://labroid:mlab14@ds057176.mlab.com:57176/photo-meta'
-DATABASE = 'photo-meta'
+# Gphotos config
 GPHOTOS_COLLECTION = 'gphotos'
-db = None
+GPHOTO_HOST = 'mongodb://labroid:mlab14@ds057176.mlab.com:57176/photo-meta'
+GPHOTO_DATABASE = 'photo-meta'
+
+# Local config
+GPHOTO_UPLOAD_QUEUE = r"C:\Users\SJackson\Pictures\Google Photos Backup"
+IMAGE_FILETYPES = ['.jpg', '.jpeg', '.bmp', '.mov', '.gif', '.tif', '.tiff', '.fpx']
+LOG_FILE = os.path.join(r"C:\Users\SJackson\Documents\Personal\Programming", time.strftime('%Y-%m-%d-%H-%M-%S', time.localtime()) + "photolog.txt")
+ # LOG_FILE = os.path.join(r"C:\Users\SJackson\Documents\Personal\Programming\photolog.txt")
+
+LOG_FORMAT = "%(asctime)s - %(levelname)s - %(module)s - %(funcName)s - %(message)s"
+logging.basicConfig(
+    filename=LOG_FILE,
+    format=LOG_FORMAT,
+    level=logging.DEBUG,
+    filemode='w'
+)
 
 app = Flask(__name__)
 api = Api(app)
+db = None # Global database reference
+state = collections.defaultdict()
+photos = collections.defaultdict()
 
 
 def main():
     global db
-    db = pymongo.MongoClient(host=HOST)[DATABASE][GPHOTOS_COLLECTION]
+    db = pymongo.MongoClient(host=GPHOTO_HOST)[GPHOTO_DATABASE][GPHOTOS_COLLECTION]
     app.run(host='127.0.0.1', port=8080, debug=True)
 
+
+def scan_dir(target):
+    global photos
+
+    logging.info("Start processing dir")
+    save_count = 0
+    excluded_exts = {}
+    start = time.time()
+    # TODO:  Consider stripping leading/trailing quotes from target
+    target_list = list(glob.iglob(target))
+    print("target list", target_list)
+    for top in target_list:
+        logging.info('Traversing tree at {} and storing paths.'.format(top))
+        for root, dirs, files in os.walk(top):  # TODO:  Add error trapping argument
+            for path in [os.path.join(root, x) for x in files]:
+                file_ext = os.path.splitext(path)[1].lower()
+                if file_ext in IMAGE_FILETYPES:
+                    photos[path] = None
+                    save_count += 1
+                else:
+                    if file_ext in excluded_exts:
+                        excluded_exts[file_ext] += 1
+                    else:
+                        excluded_exts[file_ext] = 1
+        logging.info("Total records for {}: saved {} of {}".format(top, save_count, len(photos)))
+    print("Indexing done.  File count: {}, elapsed time = {}".format(len(photos), time.time() - start))
+    print("target_list", target_list, "len photos", len(photos))
+    response = json.dumps({'dirs': target_list, 'filecount': len(photos), 'dirsize': 222, 'excluded_exts': [(str(k).replace(".", "") + ":" + str(v)) for k,v in excluded_exts.items()], 'elapsed_time': str(math.ceil((time.time() - start)*1000)/1000)})
+    print("response = ", response)
+    return response
+
+# def check_photos(photos):
+#     md5_start = time.time()
+#     for count, photo in enumerate(photos):
+#         photos[photo] = file_md5sum(photo)
+#         if not count % 100:
+#             print("MD5 {} Done".format(count))
+#         state.update({'md5_count': count, 'md5_elapsed': time.time() - md5_start})
+#     print("MD5 sums done. Elapsed time = {}".format(time.time() - md5_start))
+#
+#     db_member_start = time.time()
+#     found_count = 0
+#     missing_count = 0
+#     for photo in photos:
+#         record = db.find_one({'md5Checksum': photos[photo]})
+#         if record:
+#             # print("{} found {}".format(photo, record))
+#             found_count += 1
+#         else:
+#             # print("{} not found".format(photo))
+#             missing_count += 1
+#             print("Copying {} to {}".format(photo, GPHOTO_UPLOAD_QUEUE))
+#             shutil.copy2(photo, GPHOTO_UPLOAD_QUEUE)
+#         if not (found_count + missing_count) % 100:
+#             print("Processed {}".format(found_count + missing_count))
+#     logging.info("Done lookup. Found = {}, Missing = {}, Total ={}, Elapsed = {}, time/record = {}".format(found_count,
+#                                                                                                     missing_count,
+#                                                                                                     found_count + missing_count,
+#                                                                                                     time.time() - db_member_start,
+#                                                                                                     (
+#                                                                                                         time.time() - db_member_start) / (
+#                                                                                                         found_count + missing_count)))
+#
+# def file_md5sum(path):
+#     BUF_SIZE = 65536
+#
+#     md5 = hashlib.md5()
+#     try:
+#         f = open(path, 'rb')
+#     except IOError:
+#         logging.error("Can't open path {}".format(path))
+#     else:
+#         with f:
+#             while True:
+#                 data = f.read(BUF_SIZE)
+#                 if not data:
+#                     break
+#                 md5.update(data)
+#     return md5.hexdigest()
 
 @app.route('/')
 def hello():
@@ -70,10 +153,57 @@ class Count(Resource):
         elapsed = time.time() - start
         return ({'elapsed': elapsed, 'count': count})
 
-class Stats(Resource):
+
+class DirStats(Resource):
+    def post(self):
+        print("DirStats reached {}".format(dir(request)))
+        #pprint(vars(request))
+        # parser = reqparse.RequestParser()
+        # parser.add_argument('directory', required = True, type=str, help="Provide directory string optionally using Linux wildcards")
+        # directory = parser.parse_args()['directory']
+        json_data = request.get_json(force=True)  # TODO:  WHy do we have to force this??
+        print("Got JSON data {}".format(json_data))
+        directory = json_data['directory']
+        print("Requested dir: {}".format(directory))
+        return scan_dir(directory)
+
+
+class TraverseCheck(Resource):
     def get(self):
-        """Return program status."""
-        return {'count': 0, 'size': 10}
+        start = time.time()
+        found_count = 0
+        missing_count = 0
+        for photo in photos:
+            record = db.find_one({'md5Checksum': photos[photo]})
+            if record:
+                # print("{} found {}".format(photo, record))
+                found_count += 1
+            else:
+                # print("{} not found".format(photo))
+                missing_count += 1
+                print("Copying {} to {}".format(photo, GPHOTO_UPLOAD_QUEUE))
+                shutil.copy2(photo, GPHOTO_UPLOAD_QUEUE)
+            if not (found_count + missing_count) % 100:
+                print("Processed {}".format(found_count + missing_count))
+        print("Done lookup. Found = {}, Missing = {}, Total ={}, Elapsed = {}, time/record = {}".format(found_count,
+                                                                                                        missing_count,
+                                                                                                        found_count + missing_count,
+                                                                                                        time.time() - start,
+                                                                                                        (
+                                                                                                            time.time() - start) / (
+                                                                                                            found_count + missing_count)))
+        logging.info("Total records saved for {}: {}".format(ARCHIVE_PATH, save_count))
+
+
+class StatServer(Resource):
+    def get(self):
+        name = db.full_name
+        app_ok = 'Up'
+        if name:
+            db_ok = 'Up'
+        else:
+            db_ok = 'Down'
+        return ({'app_ok': app_ok, 'db_ok': db_ok})
 
 
 # class sync(Resource):
@@ -102,9 +232,13 @@ def server_error(e):
     See logs for full stacktrace.
     """.format(e), 500
 
+
 api.add_resource(Count, '/count')
-api.add_resource(Stats, '/stats')
+api.add_resource(DirStats, '/dirstats')
+api.add_resource(StatServer, '/statserver')
 api.add_resource(GetMetadata, '/metadata', '/members')
+
+
 
 # class Gphotos(object):
 #     """
@@ -308,6 +442,7 @@ api.add_resource(GetMetadata, '/metadata', '/members')
 #                 credentials = tools.run(flow, store)
 #             #print('Storing credentials to ' + credential_path)
 #         return credentials
+
 
 
 if __name__ == '__main__':

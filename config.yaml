@@ -1,0 +1,25 @@
+gphotos:
+  host: 'mongodb://labroid:mlab14@ds057176.mlab.com:57176/photo-meta'
+  database: 'photo-meta'
+  collection: 'gphotos'
+
+task_queue:
+  host: 'localhost'
+  database: 'task_queue'
+  md5: 'md5tasks'
+  archive: 'archive_jobs'
+
+local:
+  gphoto_upload_queue: "C:\\Users\\SJackson\\Pictures\\GooglePhotosQueue"
+  image_filetypes: [.jpg, .jpeg, .bmp, .mov, .gif, .tif, .tiff, .fpx]
+  log_file_base: "C:\\Users\\SJackson\\Documents\\Personal\\Programming"
+  log_format: "%(asctime)s - %(levelname)s - %(module)s - %(funcName)s - %(message)s"
+
+# # LOG_FILE = os.path.join(r"C:\Users\SJackson\Documents\Personal\Programming\photolog.txt") COLLECTION: 'gphotos'
+
+#
+#LOG_CONFIG:
+#    filename: LOG_FILE,
+#    format: LOG_FORMAT,
+#    level: logging.DEBUG,
+#    filemode: 'w'

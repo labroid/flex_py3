@@ -1,6 +1,7 @@
 import pymongo
 import logging
 import os
+import yaml
 
 import httplib2
 from apiclient import discovery
@@ -8,13 +9,22 @@ import oauth2client
 from oauth2client import client
 from oauth2client import tools
 
+from utils import cfg_obj
+
+with open("config.yaml") as f:
+    config = yaml.safe_load(f.read())
+
+gphoto_cfg = cfg_obj(config, 'gphotos')
+local_cfg = cfg_obj(config, 'local')
+tq_cfg = cfg_obj(config, 'task_queue')
+
 
 class Gphotos(object):
     """
     Gphotos:  A set of tools to aid management of local images and a Google Photos repository
     """
 
-    def __init__(self, host, database, collection):
+    def __init__(self, host=gphoto_cfg.host, database=gphoto_cfg.database, collection=gphoto_cfg.collection):
         self.service = None
         self.db = pymongo.MongoClient(host=host)[database][collection]
         self.db.create_index('id')
@@ -57,10 +67,6 @@ class Gphotos(object):
                 logging.info("Google sent {} records".format(file_count))
                 db_status = self.db.insert_many(file_list.get('files'))
                 logging.info("Mongodb stored {} records".format(len(db_status.inserted_ids)))
-                assert file_count == len(db_status.inserted_ids), \
-                    "Records stored != records from gPhotos.  Got {} gPhotos and {} ids".\
-                    format(file_count, len(db_status.inserted_ids))  # TODO:  Do I need to do this or will Mongo
-                                                                     # TODO:  throw exception on failure?
                 if 'nextPageToken' in file_list:
                     next_page_token = file_list['nextPageToken']
                 else:
@@ -84,15 +90,11 @@ class Gphotos(object):
                     database_changed = True
                     for change in changes['changes']:
                         if change['removed'] is True:
-                            db_status = self.db.delete_one({'id': change['fileId']})
-                            # assert db_status.deleted_count == 1, "Deleted files count should be 1, got {}".format(
-                            #     db_status.deleted_count)  # Turns out you can't do this as it might not already be in the database
+                            self.db.delete_one({'id': change['fileId']})
                             delete_count += 1
                         else:
-                            db_status = self.db.replace_one({'id': change['file']['id']}, change['file'],
-                                                            upsert=True)  # TODO:  Make sure the data that comes with change is complete for insertion
-                            #                      assert db_status.modified_count == 1, "Modified files count should be 1, got {}".format(
-                            #                          db_status.modified_count)
+                            # TODO:  Make sure the data that comes with change is complete for insertion
+                            self.db.replace_one({'id': change['file']['id']}, change['file'], upsert=True)
                             new_count += 1
                 if 'nextPageToken' in changes:
                     change_token = changes['nextPageToken']
@@ -100,7 +102,6 @@ class Gphotos(object):
                     assert 'newStartPageToken' in changes, "newStartPageToken missing when nextPageToken is missing.  Should never happen."
                     db_status = self.db.replace_one({'change_token': {'$exists': True}},
                                                     {'change_token': changes['newStartPageToken']})
-                    assert db_status.modified_count == 1, "Database did not update correctly"
                     break  # All changes have been received
             logging.info("Sync update complete.  New files: {} Deleted files: {}".format(new_count, delete_count))
         full_count = self.db.count()
@@ -175,13 +176,12 @@ class Gphotos(object):
         while parents_needed:
             parent_id = parents_needed.pop()
             parent_meta = self.service.files().get(fileId=parent_id, fields='id,kind,md5Checksum,mimeType,name,ownedByMe,parents,size,trashed').execute()
-            self.db.insert(parent_meta)  #TODO Check write was successful?
+            self.db.insert(parent_meta)
             ids_in_db.add(parent_id)
             for parent in parent_meta.get('parents') or []:
                 if parent not in ids_in_db:
                     parents_needed.add(parent)
         logging.info('Done getting parents')
-
 
     def __set_paths(self, id, path):
         """
@@ -198,3 +198,21 @@ class Gphotos(object):
                 path.append(my_name)
                 self.__set_paths(child['id'], path)
                 path.pop()
+
+    def check_member(self, md5):
+        """
+        If md5 is in Google Photos returns associated Gphoto metadata, otherwise returns None
+        :param md5: MD5 sum of record possibly on Google Photos
+        :return: dict of matching Google Photo metadata, returns None if not in Google Photos
+        """
+        meta = self.db.find_one({'md5Checksum': md5, 'trashed': False, 'explicitlyTrashed': False})
+        if meta is not None:
+            gphoto_path = os.path.join(*(self.db.find_one({'id': meta['parents'][0]})['path']))
+            meta.update({'gpath': gphoto_path})
+        return meta
+
+    def server_stat(self):
+        if self.db.full_name:
+            return True
+        else:
+            return False

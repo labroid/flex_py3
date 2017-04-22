@@ -6,8 +6,7 @@ gphotos:
 task_queue:
   host: 'localhost'
   database: 'task_queue'
-  md5: 'md5tasks'
-  archive: 'archive_jobs'
+  collection: 'archive_jobs'
 
 local:
   gphoto_upload_queue: "C:\\Users\\SJackson\\Pictures\\GooglePhotosQueue"

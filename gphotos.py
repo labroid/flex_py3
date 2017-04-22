@@ -29,6 +29,24 @@ class Gphotos(object):
         self.db = pymongo.MongoClient(host=host)[database][collection]
         self.db.create_index('id')
         self.db.create_index('md5Checksum')
+        self.SCOPES = 'https://www.googleapis.com/auth/drive.readonly https://www.googleapis.com/auth/drive.photos.readonly'
+        self.CLIENT_SECRET_FILE = 'client_secret.json'
+        self.APPLICATION_NAME = 'Other Client 1'
+        self.cred_store = None
+        home_dir = os.path.expanduser('~')
+        credential_dir = os.path.join(home_dir, '.credentials')
+        if not os.path.exists(credential_dir):
+            os.makedirs(credential_dir)
+        credential_path = os.path.join(credential_dir,
+                                       'drive-batch.json')
+        self.cred_store = oauth2client.file.Storage(credential_path)
+
+    def credentials_ok(self):
+        credentials = self.cred_store.get()
+        if not credentials or credentials.invalid:
+            return False
+        else:
+            return True
 
     def sync(self):
         """
@@ -100,8 +118,8 @@ class Gphotos(object):
                     change_token = changes['nextPageToken']
                 else:
                     assert 'newStartPageToken' in changes, "newStartPageToken missing when nextPageToken is missing.  Should never happen."
-                    db_status = self.db.replace_one({'change_token': {'$exists': True}},
-                                                    {'change_token': changes['newStartPageToken']})
+                    self.db.replace_one({'change_token': {'$exists': True}},
+                                        {'change_token': changes['newStartPageToken']})
                     break  # All changes have been received
             logging.info("Sync update complete.  New files: {} Deleted files: {}".format(new_count, delete_count))
         full_count = self.db.count()
@@ -122,7 +140,7 @@ class Gphotos(object):
         http = credentials.authorize(httplib2.Http())
         self.service = discovery.build('drive', 'v3', http=http)
 
-    def get_credentials(self):
+    def get_credentials(self):  # TODO:  This still won't reset itself.
         """Gets valid user credentials from storage.
 
         If nothing has been stored, or if the stored credentials are invalid,
@@ -131,9 +149,6 @@ class Gphotos(object):
         Returns:
             Credentials, the obtained credential.
         """
-        SCOPES = 'https://www.googleapis.com/auth/drive.readonly https://www.googleapis.com/auth/drive.photos.readonly'
-        CLIENT_SECRET_FILE = 'client_secret.json'
-        APPLICATION_NAME = 'Other Client 1'
 
         try:
             import argparse
@@ -141,23 +156,18 @@ class Gphotos(object):
         except ImportError:
             flags = None
 
-        home_dir = os.path.expanduser('~')
-        credential_dir = os.path.join(home_dir, '.credentials')
-        if not os.path.exists(credential_dir):
-            os.makedirs(credential_dir)
-        credential_path = os.path.join(credential_dir,
-                                       'drive-batch.json')
-
-        store = oauth2client.file.Storage(credential_path)
-        credentials = store.get()
+        credentials = self.cred_store.get()
         if not credentials or credentials.invalid:
-            flow = client.flow_from_clientsecrets(CLIENT_SECRET_FILE, SCOPES)
-            flow.user_agent = APPLICATION_NAME
-            if flags:
-                credentials = tools.run_flow(flow, store, flags)
-            else:  # Needed only for compatibility with Python 2.6
-                credentials = tools.run(flow, store)
-                # print('Storing credentials to ' + credential_path)
+            raise ValueError("Gotta fix this")
+            # flow = client.flow_from_clientsecrets(self.CLIENT_SECRET_FILE, scope=self.SCOPES,
+            #                                       redirect_uri=redirect_uri)
+            # flow = client.flow_from_clientsecrets(self.CLIENT_SECRET_FILE, self.SCOPES)
+            # flow.user_agent = self.APPLICATION_NAME
+            # if flags:
+            #     credentials = tools.run_flow(flow, store, flags)
+            # else:  # Needed only for compatibility with Python 2.6
+            #     credentials = tools.run(flow, store)
+            #     # print('Storing credentials to ' + credential_path)
         return credentials
 
     def __get_parents(self):

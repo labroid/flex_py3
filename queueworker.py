@@ -1,14 +1,13 @@
-import pymongo
 import logging
 import time
 import os
+import sys
 import os.path
 import yaml
 from pathlib import Path
-import collections
-import pprint
 import shutil
 
+from local_db import LocalDb
 from utils import cfg_obj
 
 
@@ -21,6 +20,7 @@ def main():
     :return:
     """
     queueworker = QueueWorker()
+
 
     # Configuration
 class QueueWorker:
@@ -41,22 +41,21 @@ class QueueWorker:
             filemode='w'
         )
 
-        self.local_db = pymongo.MongoClient(host=self.tq_cfg.host)[self.tq_cfg.database][self.tq_cfg.archive]
-
+        self.local_db = LocalDb().db
         while True:
             queue_filenames = [f for f in os.listdir(self.local_cfg.gphoto_upload_queue) if
                                os.path.isfile(os.path.join(self.local_cfg.gphoto_upload_queue, f))]
             # archive_candidates = local_db.find({'queue_state': {'$ne': 'done'}})
-            archive_candidates = self.local_db.find()
-            for photo in archive_candidates:
+            for photo in self.local_db.find():  # TODO:  What if a photo isn't in the queue, or a queue photo isn't in the database?
                 queue_state = photo['queue_state']
-                assert photo['in_gphotos'] in [None, True, False], \
-                    "photos['in photos'] contains {}".format(photo['in_gphotos'])
+                in_gphotos = photo['in_gphotos']
+                assert in_gphotos in [None, True, False], \
+                    "photos['in_gphotos'] contains {}".format(in_gphotos)
                 assert queue_state in [None, 'enqueued', 'pending', 'done', 'mirrored'], \
                     "photos['queue_state'] contains {}".format(photo['queue_state'])
-                if photo['in_gphotos'] is None:
+                if in_gphotos is None:
                     pass  # Let other services determine if in gphotos before taking action
-                elif photo['in_gphotos']:
+                elif in_gphotos is True:
                     if queue_state is None:
                         self.mark_done(photo, "done")
                     elif queue_state == "enqueued":
@@ -67,9 +66,7 @@ class QueueWorker:
                         self.dequeue_photo(photo, queue_filenames)
                     elif queue_state == 'mirrored':
                         pass
-                    else:
-                        raise ValueError("Should never get here, queue_state = {}".format(photo['queue_state']))
-                else:
+                elif in_gphotos is False:
                     if queue_state is None:
                         self.conditionaly_enqueue(photo, queue_filenames)
                     elif queue_state == "enqueued":
@@ -77,12 +74,11 @@ class QueueWorker:
                     elif queue_state == 'pending':
                         self.conditionaly_enqueue(photo, queue_filenames)
                     elif queue_state == 'done' or queue_state == 'mirrored':
-                        raise RuntimeError("This should never happen, photo queue_state is 'done' while in_gphotos is False")
-                    else:
-                        raise ValueError("Should never get here, queue_state = {}".format(queue_state))
-            print("Waiting...")
-            time.sleep(10)
-
+                        err_msg = "This should never happen, photo queue_state is 'done' or 'mirroed' while in_gphotos is False"
+                        logging.error(err_msg)
+                        raise RuntimeError("{}".format(err_msg))
+            print("{} Waiting...".format(time.asctime()))
+            time.sleep(10)  # TODO:  Extend this after debugging done
 
     def conditionaly_enqueue(self, photo, queue_filenames):
         if os.path.basename(photo['path']) in queue_filenames:
@@ -93,7 +89,6 @@ class QueueWorker:
             shutil.copy2(photo['path'], self.local_cfg.gphoto_upload_queue)
             self.local_db.update_one({'path': photo['path']}, {'$set': {'queue_state': 'enqueued'}})
 
-
     def dequeue_photo(self, photo, queue_filenames):
         if os.path.basename(photo['path']) in queue_filenames:
             gpath = photo.get('archive_meta').get('gpath')
@@ -102,12 +97,18 @@ class QueueWorker:
                 source = os.path.join(self.local_cfg.gphoto_upload_queue, os.path.basename(photo['path']))
                 dest = os.path.join(self.local_cfg.gphoto_root, gpath, os.path.basename(photo['path']))
                 if not Path(dest).exists():
-                    os.rename(source, dest)
-                    self.mark_done(self.local_db, photo, "mirrored")
-            print("Moved {} to {}".format(source, dest))
+                    try:
+                        os.rename(source, dest)
+                        self.mark_done(photo, "mirrored")
+                        print("Moved {} to {}".format(source, dest))
+                    except:
+                        print("File access error:", sys.exc_info()[0])  # If contention for file, catch it on next cycle
         else:
             self.mark_done(photo, "done")
 
+    def groom_queue(self):
+        # TODO: For all the files in the queue check their MD5 sum against gphotos and dequeue
+        pass
 
     def mark_done(self, photo, state):
         self.local_db.update_one({'path': photo['path']}, {'$set': {'in_gphotos': True, 'queue_state': state}})

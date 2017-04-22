@@ -7,32 +7,52 @@ import glob
 import os
 import os.path
 import yaml
+import flask
+import webbrowser
 from flask import Flask, request
 from flask_restful import Resource, Api, reqparse
+from oauth2client import client
+import httplib2
+from apiclient import discovery
 
 from utils import cfg_obj
 from gphotos import Gphotos
+from local_db import LocalDb
+
+'''
+Features needed:
+- Check google upload queue and see if already in Gphotos.  If so, then mirror (or delete if duplicated) and clear work queue
+- Check directory to see if already in gphotos
+   - If so, mirror or delete(?)
+   - Else copy to queue
+'''
 
 app = Flask(__name__)
 api = Api(app)
 
 
 def main():
+    import uuid
+    app.secret_key = str(uuid.uuid4())
+    app.debug = False
     app.run(host='127.0.0.1', port=8080, debug=True)
 
 
+
 class DirStats(Resource):
-    def post(self):  # TODO:  Clear previous results on dir change??
-        print("DirStats reached {}".format(dir(request)))
+    @staticmethod
+    def post():  # TODO:  Clear previous results on dir change??
+        # print("DirStats reached {}".format(dir(request)))
         json_data = request.get_json(force=True)  # TODO:  Why do we have to force this??
-        print("Got JSON data {}".format(json_data))
+        # print("Got JSON data {}".format(json_data))
         directory = json_data['directory'].replace('"', '')  # Remove surrounding quotes to make cut/paste easier
         print("Requested dir: {}".format(directory))
         return h.scan_dir(directory)
 
 
 class StatServer(Resource):  # TODO: Might be better to return True/False so react.js can show color/text choices easily
-    def get(self):
+    @staticmethod
+    def get():
         if h.gphotos.server_stat():
             db_ok = 'Up'
         else:
@@ -41,23 +61,27 @@ class StatServer(Resource):  # TODO: Might be better to return True/False so rea
 
 
 class StartCheck(Resource):
-    def get(self):
+    @staticmethod
+    def get():
+
         h.check_photos()
         return {'checkstatus': 'OK'}
 
 
 class MoveToQueue(Resource):
-    def get(self):
+    @staticmethod
+    def get():
         # move_to_queue()
         return {'status': 'OK'}
 
 
 class CheckStat(Resource):
-    def get(self):
+    @staticmethod
+    def get():
         total_files = h.local_db.count()
         md5_done = h.local_db.find({'md5sum': {'$ne': None}}).count()
         in_gphotos = h.local_db.find({'in_gphotos': True}).count()
-        in_upload_queue = h.local_db.find({'queue_state': 'queued'}).count()
+        in_upload_queue = h.local_db.find({'queue_state': 'enqueued'}).count()
         stats = {'total_files': total_files, 'md5_done': md5_done, 'in_gphotos': in_gphotos,
                  'in_upload_queue': in_upload_queue}
         print("Queue Process stats: {}".format(stats))
@@ -79,20 +103,59 @@ def server_error(e):
     """.format(e), 500
 
 
+# Authentication
+@app.route('/')
+def index():
+    # if 'credentials' not in flask.session:
+    #     return flask.redirect(flask.url_for('oauth2callback'))
+    # credentials = client.OAuth2Credentials.from_json(flask.session['credentials'])
+    # if credentials.access_token_expired:
+    #     return flask.redirect(flask.url_for('oauth2callback'))
+    # else:
+    #     http_auth = credentials.authorize(httplib2.Http())
+    #     drive = discovery.build('drive', 'v2', http_auth)  # Same as discovery.build set to service in gphotos app
+    #     files = drive.files().list().execute()
+    #     print(json.dumps(files))
+    #     #return json.dumps(files)
+    return flask.redirect('http://localhost:3000/')  # TODO:  Also need to start server and put in path to root??
+
+
+@app.route('/oauth2callback')
+def oauth2callback():
+    CLIENT_SECRET_FILE = r'C:\Users\SJackson\Documents\Personal\Programming\flex_py3\client_secret.json'
+    SCOPES = 'https://www.googleapis.com/auth/drive.readonly https://www.googleapis.com/auth/drive.photos.readonly'
+    flow = client.flow_from_clientsecrets(
+        CLIENT_SECRET_FILE, scope=SCOPES,
+        redirect_uri=flask.url_for('oauth2callback', _external=True)
+    )
+    if 'code' not in flask.request.args:
+        auth_uri = flow.step1_get_authorize_url()
+        return flask.redirect(auth_uri)
+    else:
+        auth_code = flask.request.args.get('code')
+        credentials = flow.step2_exchange(auth_code)
+        h.gphotos_storage.put(credentials)
+        # flask.session['credentials'] = credentials.to_json()
+    return flask.redirect(flask.url_for('index'))
+
+
 # Helper functions
-class H():
+class Helpers:
     def __init__(self):
         with open("config.yaml") as f:
             config = yaml.safe_load(f.read())
 
         self.local_cfg = cfg_obj(config, 'local')
-        self.tq_cfg = cfg_obj(config, 'task_queue')
+        # self.tq_cfg = cfg_obj(config, 'task_queue')
         self.gphotos = Gphotos()
-        self.local_db = pymongo.MongoClient(host=self.tq_cfg.host)[self.tq_cfg.database][self.tq_cfg.archive]
+        self.local_db = LocalDb().db
+        # self.local_db = pymongo.MongoClient(host=self.tq_cfg.host)[self.tq_cfg.database][self.tq_cfg.archive]
         self.photos = collections.defaultdict()
+        self.gphotos_storage = None
 
-        print("Database=", self.local_db.full_name)
-        print("Syncing Gphoto database...", end='')
+        # print("Database=", self.local_db.full_name)
+        print("Syncing Gphoto database...", end='')  # TODO: Can't do this; wsky server isn't running
+
         sync_stats = self.gphotos.sync()
         print(sync_stats)
         logging.info("Initial gphotos online db sync done, sync stats: {}".format(sync_stats))
@@ -129,6 +192,11 @@ class H():
         print("response = ", response)
         return response
 
+    def check_gphoto_creds(self):
+        if not self.gphotos.credentials_ok():
+            self.gphotos_storage = self.gphotos.cred_store
+            flask.redirect(flask.url_for('oauth2callback'))
+
     def check_photos(self):  # TODO:  Enable start/stop
         print("Syncing Gphoto database...", end='')
         self.gphotos.sync()
@@ -155,13 +223,12 @@ class H():
                                      })
                 count += 1
             else:
-                print("Duplicate in queue:", photometa['path'])
+                print("Duplicate in queue:", photometa['path'])  # TODO: Offer ability to move source photos to mirror
         print("Added {} jobs to work queue. Elapsed time = {:.3f}".format(count, time.time() - checked_start))
-        return {'check_done': True}
 
 
 if __name__ == '__main__':
-    h = H()
+    h = Helpers()
     # TODO: change to rotating log file with dict config from yaml
     LOG_FILE = h.local_cfg.log_file_base + time.strftime('%Y-%m-%d-%H-%M-%S', time.localtime()) + "photolog.txt"
     print(LOG_FILE)
@@ -172,6 +239,8 @@ if __name__ == '__main__':
         level=logging.DEBUG,
         filemode='w'
     )
+
+    webbrowser.open('http://localhost:8080', new=2)
     main()
 
 

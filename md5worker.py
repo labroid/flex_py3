@@ -9,6 +9,7 @@ import pprint
 
 from utils import file_md5sum, cfg_obj
 from gphotos import Gphotos
+from local_db import LocalDb
 
 with open("config.yaml") as f:
     config = yaml.safe_load(f.read())
@@ -29,7 +30,8 @@ logging.basicConfig(
 # TODO:  Check depth of queue, and if it is over N, launch another instance of myself??
 
 gphotos = Gphotos()
-local_db = pymongo.MongoClient(host=tq_cfg.host)[tq_cfg.database][tq_cfg.archive]
+local_db = LocalDb().db  #TODO:  Can this be done using getattr in LocalDb?
+#local_db = pymongo.MongoClient(host=tq_cfg.host)[tq_cfg.database][tq_cfg.collection]
 
 archived_count = 0
 missing_count = 0
@@ -42,7 +44,7 @@ while True:
     )
     if job is None:
         time.sleep(1)
-        print("Waiting...")
+        print("{} Waiting...".format(time.asctime()))
     else:
         print("MD5 for", job['path'], end="")
         md5sum = file_md5sum(job['path'])  # TODO:  Should do something to notify user that MD5 failed on a bad file, path, or permissions

@@ -3,7 +3,7 @@ import collections
 import logging
 import yaml
 
-def file_md5sum(path):  # TODO:  Extract into utility app
+def file_md5sum(path):
     BUF_SIZE = 65536
 
     md5 = hashlib.md5()

@@ -9,12 +9,12 @@ import pprint
 
 from utils import file_md5sum, cfg_obj
 from gphotos import Gphotos
+from local_db import LocalDb
 
 
 # Configuration
 with open("config.yaml") as f:
     config = yaml.safe_load(f.read())
-#gphoto_cfg = cfg_obj(config, 'gphotos')
 local_cfg = cfg_obj(config, 'local')
 tq_cfg = cfg_obj(config, 'task_queue')
 
@@ -30,19 +30,21 @@ logging.basicConfig(
 
 # TODO:  Check depth of queue, and if it is over N, launch another instance of myself??
 
-local_db = pymongo.MongoClient(host=tq_cfg.host)[tq_cfg.database][tq_cfg.archive]
+local_db = LocalDb().db
 gphotos = Gphotos()
 
 while True:
+    gphotos.sync()
     photos = local_db.find({'$or': [{'in_gphotos': False}, {'in_gphotos': None}]})
     for photo in photos:
         local_db.update_one({'path': photo['path']}, {'$set': {'gphoto_check_out': time.time()}})
         record = gphotos.check_member(photo['md5sum'])
         if record:
-            update = {'gphoto_check_in': time.time(), 'in_gphotos': True, 'archive_meta': record}
+            local_db.update_one({'path': photo['path']}, {'$set': {'gphoto_check_in': time.time(), 'in_gphotos': True, 'archive_meta': record}})
+            logging.info('Worker X done: {} marked as in Gphotos'.format(photo['path']))
         else:
-            update = {'gphoto_check_in': time.time(), 'in_gphotos': False}
-        local_db.update_one({'path': photo['path']}, {'$set': update})
-        logging.info('Worker X done: {}'.format(photo['path']))
-    print("Waiting...")
-    time.sleep(10)
+            if photo['in_gphotos'] is None:
+                local_db.update_one({'path': photo['path']}, {'$set': {'gphoto_check_in': time.time(), 'in_gphotos': False}})
+                logging.info('Worker X done: {} marked as not in Gphotos'.format(photo['path']))
+    print("{} Waiting...".format(time.asctime()))
+    time.sleep(100)

@@ -1,9 +1,12 @@
 import logging
+from logging.config import dictConfig
 import time
 import os
 import sys
 import os.path
 import yaml
+# import fs
+# from fs.osfs import OSFS
 from pathlib import Path
 import shutil
 
@@ -19,7 +22,7 @@ def main():
     if possible.
     :return:
     """
-    queueworker = QueueWorker()
+    QueueWorker()
 
 
     # Configuration
@@ -27,24 +30,18 @@ class QueueWorker:
     def __init__(self):
         with open("config.yaml") as f:
             config = yaml.safe_load(f.read())
-
         self.local_cfg = cfg_obj(config, 'local')
         self.tq_cfg = cfg_obj(config, 'task_queue')
+        dictConfig(config['logging'])
+        self.log = logging.getLogger(__name__)
 
-        # TODO:  logging can be set via a dict, so put logging settings in config.yaml and (probably) move to main call
-        logger = logging.getLogger(__name__)
-        LOG_FILE = os.path.join(self.local_cfg.log_file_base, time.strftime('%Y-%m-%d-%H-%M-%S', time.localtime()) + "photolog.txt")
-        logging.basicConfig(
-            filename=LOG_FILE,
-            format=self.local_cfg.log_format,
-            level=logging.DEBUG,
-            filemode='w'
-        )
+        # with OSFS(self.local_cfg.gphoto_upload_queue) as queue_fs:
+        # queue_fs = OSFS(self.local_cfg.gphoto_upload_queue)
 
         self.local_db = LocalDb().db
+        self.sync_db()
         while True:
-            queue_filenames = [f for f in os.listdir(self.local_cfg.gphoto_upload_queue) if
-                               os.path.isfile(os.path.join(self.local_cfg.gphoto_upload_queue, f))]
+            queue_filenames = self.dir_filenames(self.local_cfg.gphoto_upload_queue)
             # archive_candidates = local_db.find({'queue_state': {'$ne': 'done'}})
             for photo in self.local_db.find():  # TODO:  What if a photo isn't in the queue, or a queue photo isn't in the database?
                 queue_state = photo['queue_state']
@@ -57,7 +54,7 @@ class QueueWorker:
                     pass  # Let other services determine if in gphotos before taking action
                 elif in_gphotos is True:
                     if queue_state is None:
-                        self.mark_done(photo, "done")
+                        self.mark_done(photo, "done")  # TODO:  This should mirror
                     elif queue_state == "enqueued":
                         self.dequeue_photo(photo, queue_filenames)
                     elif queue_state == 'pending':
@@ -75,10 +72,18 @@ class QueueWorker:
                         self.conditionaly_enqueue(photo, queue_filenames)
                     elif queue_state == 'done' or queue_state == 'mirrored':
                         err_msg = "This should never happen, photo queue_state is 'done' or 'mirroed' while in_gphotos is False"
-                        logging.error(err_msg)
+                        print(err_msg)
                         raise RuntimeError("{}".format(err_msg))
             print("{} Waiting...".format(time.asctime()))
             time.sleep(10)  # TODO:  Extend this after debugging done
+
+    def dir_filenames(self, path):
+        return [f for f in os.listdir(path) if os.path.isfile(os.path.join(path, f))]
+
+    def sync_db(self):
+        queue_filenames = self.dir_filenames(self.local_cfg.gphoto_upload_queue)
+        for name in os.path.join(self.local_cfg.gphoto_upload_queue,)
+
 
     def conditionaly_enqueue(self, photo, queue_filenames):
         if os.path.basename(photo['path']) in queue_filenames:

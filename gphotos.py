@@ -16,7 +16,7 @@ with open("config.yaml") as f:
 
 gphoto_cfg = cfg_obj(config, 'gphotos')
 local_cfg = cfg_obj(config, 'local')
-tq_cfg = cfg_obj(config, 'task_queue')
+# tq_cfg = cfg_obj(config, 'task_queue')
 
 
 class Gphotos(object):
@@ -64,7 +64,7 @@ class Gphotos(object):
 
         INIT_FIELDS = "files(id,imageMediaMetadata/time,md5Checksum,mimeType,name,originalFilename,ownedByMe,parents,size,spaces,explicitlyTrashed,trashed), nextPageToken"
         change_token_cursor = self.db.find({'change_token': {'$exists': True}})
-        assert change_token_cursor.count() <= 1  # TODO:  What do we do about assertion failures in a RESTful service?
+        #assert change_token_cursor.count() <= 1  # Commented out as this was way too expensive call to Google cloud
 
         if change_token_cursor is None:  # If we have no change token, drop and resync the database
             db_full_resync = True
@@ -85,9 +85,8 @@ class Gphotos(object):
                 logging.info("Google sent {} records".format(file_count))
                 db_status = self.db.insert_many(file_list.get('files'))
                 logging.info("Mongodb stored {} records".format(len(db_status.inserted_ids)))
-                if 'nextPageToken' in file_list:
-                    next_page_token = file_list['nextPageToken']
-                else:
+                next_page_token = file_list.get('nextPageToken')
+                if next_page_token is None:
                     break
             # Once db is updated with all changes, get initial change token
             change_token = self.service.changes().getStartPageToken().execute()
@@ -220,6 +219,7 @@ class Gphotos(object):
             gphoto_path = os.path.join(*(self.db.find_one({'id': meta['parents'][0]})['path']))
             meta.update({'gpath': gphoto_path})
         return meta
+
 
     def server_stat(self):
         if self.db.full_name:

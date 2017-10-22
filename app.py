@@ -13,9 +13,10 @@ from gphotos import Gphotos
 import shutil
 
 from utils import cfg_obj, file_md5sum, Config
-from models import Queue, Candidates, State, Gphoto_parent
+from models import Db_connect, Queue, Candidates, State
 
-me.connect(db='metest')
+# me.connect(db='metest')
+Db_connect()
 
 
 def main():
@@ -76,25 +77,25 @@ def main():
 
     async queue_worker():
         while True:
-	        for each unprocessed file in queue db
-	            mark file as processing
-	            await update missing MD5 sums(_id list)
-	            await update missing gphoto membership(md5 list)
-	            await mirror files already in gphotos and not mirrored
-	            await optionally purge files already in gphotos if source still avalable
-	            await remove files in gphotos from queue and mark done in db
+            for each unprocessed file in queue db
+                mark file as processing
+                await update missing MD5 sums(_id list)
+                await update missing gphoto membership(md5 list)
+                await mirror files already in gphotos and not mirrored
+                await optionally purge files already in gphotos if source still avalable
+                await remove files in gphotos from queue and mark done in db
 
-	async candidate_worker():
-	    while True:
-	        check for new files to be added (separate process or database for selecting and adding?)
-	            await Get dir list from user and add file stats to candidate
-	            await Update missing MD5 sums for candidates
-	            await update missing gphoto membership for candidates
-	            await if not in gphotos and not in gphoto queue add to gphoto queue
-	            await mirror files already in gphotos and not mirrored
-	            await Add upload candidates to gphoto queue.  Assure no name collision by unique directory name.
-	            await optionally purge files in gphotos if source still available
-	            await remove files from candidates that are mirrored and in gphotos
+    async candidate_worker():
+        while True:
+            check for new files to be added (separate process or database for selecting and adding?)
+                await Get dir list from user and add file stats to candidate
+                await Update missing MD5 sums for candidates
+                await update missing gphoto membership for candidates
+                await if not in gphotos and not in gphoto queue add to gphoto queue
+                await mirror files already in gphotos and not mirrored
+                await Add upload candidates to gphoto queue.  Assure no name collision by unique directory name.
+                await optionally purge files in gphotos if source still available
+                await remove files from candidates that are mirrored and in gphotos
 
     """
 
@@ -109,45 +110,46 @@ class QueueWorker:
         self.mirror = OSFS(self.cfg.local.mirror_root)
         self.gphotos = Gphotos()
         self.sync_db_to_queue()
-        # self.process_queue()
+        self.process_queue()
 
     def sync_db_to_queue(self):
         self.log.debug('Creating db synced to queue')
         Queue.drop_collection()  # TODO:  Make more efficient by not dropping but checking size/mtime for changes
         for path, info in self.photo_queue.walk.info(namespaces=['details']):
             if info.is_file:
-                photo = Queue()
+                photo = Queue()  # TODO:  Photo here is hosted remotely, not locally. Need to redefine where the databases are
                 photo.queue_path = self.photo_queue.getsyspath(path)
+                photo.src_path = None #TODO: Don't know source if we start over; maybe make this smarter
                 photo.size = info.size
                 photo.queue_state = 'enqueued'
                 photo.save()
         self.log.debug('Done syncing db to queue')
 
-    # def process_queue(self):  # TODO:  Make this async
-    #     while True:
-    #         self.update_md5s(Queue.objects(md5sum=None))
-    #         self.check_gphotos(Queue.objects(me.Q(md5sum__ne=None) & me.Q(in_gphotos=False)))
+    def process_queue(self):  # TODO:  Make this async
+        while True:
+            self.update_md5s(Queue.objects(md5sum=None))
+            self.check_gphotos(Queue.objects(me.Q(md5sum__ne=None) & me.Q(in_gphotos=False)))
     #         self.dequeue(Queue.objects(me.Q(in_gphotos=True) & me.Q(queue_state_ne='done')))
     #         self.enqueue()
-    #
-    # def update_md5s(self, photos):
-    #     for photo in photos:
-    #         photo.md5sum = file_md5sum(photo.path)  # TODO: Make this async
-    #         photo.save()
-    #
-    # def check_gphotos(self, photos):
-    #     for photo in photos:
-    #         photo.gphoto_meta = self.gphotos.get_metadata(photo.md5sum)  # TODO: Make this async
-    #         if photo.gphoto_meta:
-    #             photo.in_gphotos = True
-    #         else:
-    #             photo.in_gphotos = False
-    #         photo.save()
+
+    def update_md5s(self, photos):
+        for photo in photos:
+            photo.md5sum = file_md5sum(photo.queue_path)  # TODO: Make this async
+            photo.save()
+
+    def check_gphotos(self, photos):
+        for photo in photos:
+            photo.gphoto_meta = self.gphotos.get_metadata(photo.md5sum)  # TODO: Make this async
+            if photo.gphoto_meta:
+                photo.in_gphotos = True
+            else:
+                photo.in_gphotos = False
+            photo.save()
     #
     # def mirror(self, photo): #TODO:  **************NOT DONE**************
     #     parent_gid = photo.get_metadata['parent']
     #     parents = Gphoto_parent.objects.get('gid'=parent_gid)
-    #     parent_path = fs.path.join(self.cfg.local.mirror_root, *parents)
+    #     parent_path = fs.path.join(self.cfg.local.mirror_root, *parents) gphotos_path already has relative path in it
     #
     #
     #

@@ -1,12 +1,11 @@
 import logging
 from logging.config import dictConfig
-import os
 
+import fs.path
 import mongoengine as me
-import yaml
 
-from utils import Config
 from models import Gphoto, Gphoto_parent
+from utils import Config
 
 # Constants
 GPHOTO_DB_ALIAS = 'gphotos'
@@ -57,7 +56,7 @@ class Gphotos(object):
                     if parent_count > 1:
                         self.log.debug('More than one parent record for MD5 {} gid {}'.format(md5, parent))
                     record = parent_meta.first()
-                    path = os.path.join(*record.path)
+                    path = fs.path.join(*record.path)
                 photo_meta = photo_meta.to_mongo().to_dict()
                 photo_meta.update({'gphotos_path': path})
             else:

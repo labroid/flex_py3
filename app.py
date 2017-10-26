@@ -6,7 +6,8 @@ import sys
 import os.path
 import fs
 from fs.osfs import OSFS
-from fs.path import basename
+from fs.path import basename, normpath
+
 from pathlib import Path
 import mongoengine as me
 from gphotos import Gphotos
@@ -15,12 +16,12 @@ import shutil
 from utils import cfg_obj, file_md5sum, Config
 from models import Db_connect, Queue, Candidates, State
 
-# me.connect(db='metest')
 Db_connect()
 
 
 def main():
-    q = QueueWorker()
+    initialize_state()
+    QueueWorker()
     print("Main Done")
     """
     Queue maintenance runs continuously. Analyze queue before adding new files (since we need to know if files
@@ -100,11 +101,20 @@ def main():
     """
 
 
+def initialize_state():
+    State.drop_collection()
+    state = State()
+    state.dirlist = ""
+    state.purge_ok = True
+    state.mirror_ok = True
+    state.save()
+
+
 class QueueWorker:
     def __init__(self):
         self.cfg = Config()
         dictConfig(self.cfg.logging)
-        self.log = logging.getLogger(__name__)
+        self.log = logging.getLogger(__name__) #TODO:  Logging not correctly configured
 
         self.photo_queue = OSFS(self.cfg.local.gphoto_upload_queue)
         self.mirror = OSFS(self.cfg.local.mirror_root)
@@ -113,29 +123,33 @@ class QueueWorker:
         self.process_queue()
 
     def sync_db_to_queue(self):
-        self.log.debug('Creating db synced to queue')
+        print('Creating db synced to queue')
         Queue.drop_collection()  # TODO:  Make more efficient by not dropping but checking size/mtime for changes
         for path, info in self.photo_queue.walk.info(namespaces=['details']):
             if info.is_file:
                 photo = Queue()  # TODO:  Photo here is hosted remotely, not locally. Need to redefine where the databases are
-                photo.queue_path = self.photo_queue.getsyspath(path)
-                photo.src_path = None #TODO: Don't know source if we start over; maybe make this smarter
+                photo.queue_path = path
+                photo.src_path = None #TODO: Don't know source if we start fresh; maybe make this smarter
                 photo.size = info.size
                 photo.queue_state = 'enqueued'
                 photo.save()
-        self.log.debug('Done syncing db to queue')
+        print('Done syncing db to queue')
 
     def process_queue(self):  # TODO:  Make this async
         while True:
+            # self.update_fstats(Queue.objects(size=None))
             self.update_md5s(Queue.objects(md5sum=None))
             self.check_gphotos(Queue.objects(me.Q(md5sum__ne=None) & me.Q(in_gphotos=False)))
-    #         self.dequeue(Queue.objects(me.Q(in_gphotos=True) & me.Q(queue_state_ne='done')))
+            self.dequeue(Queue.objects(me.Q(in_gphotos=True) & me.Q(queue_state__ne='done')))
+            print("Waiting...")
+            time.sleep(5)
     #         self.enqueue()
 
     def update_md5s(self, photos):
         for photo in photos:
-            photo.md5sum = file_md5sum(photo.queue_path)  # TODO: Make this async
+            photo.md5sum = file_md5sum(self.photo_queue.getsyspath(photo.queue_path))  # TODO: Make this async
             photo.save()
+        print("MD5 Done")
 
     def check_gphotos(self, photos):
         for photo in photos:
@@ -145,26 +159,31 @@ class QueueWorker:
             else:
                 photo.in_gphotos = False
             photo.save()
-    #
-    # def mirror(self, photo): #TODO:  **************NOT DONE**************
-    #     parent_gid = photo.get_metadata['parent']
-    #     parents = Gphoto_parent.objects.get('gid'=parent_gid)
-    #     parent_path = fs.path.join(self.cfg.local.mirror_root, *parents) gphotos_path already has relative path in it
-    #
-    #
-    #
-    # def dequeue(self, photos):
-    #     for photo in photos:
-    #         if State.objects.get(mirror_ok=True):
-    #             self.mirror(photo)
-    #         if fs.isfile(photo.queue_path):
-    #             fs.rm(photo.queue_path)
-    #         if State.objects.get(purge_ok=True) and fs.isfile(photo.src_path):
-    #             fs.rm(photo.src_path)
-    #         photo.queue_state = 'done'
-    #         photo.save()
-    #
+        print("Check Gphotos done")
+
+    def mirror_file(self, photo):
+        dest_dir = photo.gphoto_meta['gphotos_path']
+        dest_path = fs.path.combine(dest_dir, photo.gphoto_meta['originalFilename'])
+        if not self.mirror.isfile(fs.path.normpath(dest_path)):
+            self.mirror.makedirs(dest_dir, recreate=True)
+            fs.copy.copy_file(self.photo_queue, photo.queue_path, self.mirror, dest_path) #TODO: No error trapping; let's see how this works
+            self.log.info("Mirrored {} to {}".format(photo.queue_path, dest_path))
+
+    def dequeue(self, photos):
+        for photo in photos:
+            if State.objects.get().mirror_ok:
+                self.mirror_file(photo)
+            if self.photo_queue.isfile(photo.queue_path):
+                print("This is where we would delete from queue {}".format(photo.queue_path))
+                self.photo_queue.remove(photo.queue_path)
+            if State.objects.get().purge_ok and photo.src_path and os.path.isfile(photo.src_path):
+                print("This is where we would delete from source {}".format(photo.queue_path))
+                os.remove(photo.src_path)
+            photo.queue_state = 'done'
+            photo.save()
+
     # def enqueue(self, photo):  #TODO: This is old and must be updated *************
+    #
     #     self.update_md5s(Candidates)  #TODO:  Stopped here
     #     dest = os.path.join(self.photo_queue.root_path, os.path.splitdrive(photo.path)[1])
     #     if os.path.isfile(dest):  # Check for name collision

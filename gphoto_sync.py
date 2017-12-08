@@ -1,13 +1,12 @@
 import logging
-from logging.config import dictConfig
 import os
+from logging.config import dictConfig
 
+import httplib2
 import mongoengine as me
 import oauth2client
-import yaml
 from apiclient import discovery
 from oauth2client import tools
-import httplib2
 
 from models import Gphoto, Gphoto_change, Gphoto_parent
 from utils import Config
@@ -22,7 +21,7 @@ class Gphotos(object):
     """
 
     def __init__(self):
-        dictConfig(cfg.logging)  #TODO: Configure logging; remove print statements
+        dictConfig(cfg.logging)
         self.log = logging.getLogger(__name__)
         self.SCOPES = 'https://www.googleapis.com/auth/drive.readonly https://www.googleapis.com/auth/drive.photos.readonly'
         self.CLIENT_SECRET_FILE = 'client_secret.json'
@@ -81,7 +80,7 @@ class Gphotos(object):
                 for item in file_list.get('files'):
                     if 'id' in item:  # Change all instance of key id to gid because mongoengine reserves id
                         item['gid'] = item.pop('id')
-                    if 'size' in item: # mongoengine also reserves 'size' in modify operations
+                    if 'size' in item:  # mongoengine also reserves 'size' in modify operations
                         item['gsize'] = item.pop('size')
                     insert_list.append(Gphoto(**item))
                 Gphoto.objects.insert(insert_list)
@@ -135,7 +134,7 @@ class Gphotos(object):
             logging.info('Done set_paths')
 
         return {'db_full_resync': db_full_resync, 'full_count': full_count, 'new_count': new_count,
-                'delete_count': delete_count} #Not sure who uses all this info
+                'delete_count': delete_count}  # Not sure who uses all this info
 
     def __get_service(self):
         credentials = self.__get_credentials()
@@ -217,14 +216,16 @@ class Gphotos(object):
                 self.__set_paths(child['gid'], path)
                 path.pop()
 
-    def server_stat(self): # TODO: This needs to be a service that answers if sync is running.  Should it return refresh logs??
+    def server_stat(
+            self):  # TODO: This needs to be a service that answers if sync is running.  Should it return refresh logs??
         db = me.Document._get_db()
-        client_count = db.command("serverStatus") # TODO: Use debugger to see what I get here
+        client_count = db.command("serverStatus")  # TODO: Use debugger to see what I get here
 
         if client_count['something']:  # TODO:  Fix me!
             return True
         else:
             return False
+
 
 def main():
     gp = Gphotos()
@@ -233,6 +234,6 @@ def main():
         print("Go get new credentials")
     gp.sync()
 
+
 if __name__ == '__main__':
     main()
-
